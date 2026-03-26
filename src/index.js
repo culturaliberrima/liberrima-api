@@ -104,6 +104,21 @@ app.use('/api', (req, res, next) => {
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
+// Temporary: return auth context snippet from bundle for patching
+app.get('/api/debug/bundle-auth', async (req, res) => {
+  try {
+    const { text } = await fetchVercel('/assets/index-Bht0jmQ4.js');
+    // Find the auth provider pattern — look for isLoading useState
+    const idx = text.indexOf('isLoading');
+    const ctx = idx >= 0 ? text.substring(Math.max(0, idx - 200), idx + 400) : 'NOT FOUND';
+    // Strip any sensitive strings
+    const safe = ctx.replace(/password/gi,'[PW]').replace(/token/gi,'[TK]');
+    res.json({ idx, len: text.length, ctx: safe });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ──────────────────────────────────────────────────────────────
 // Admin panel proxy — serves the Vercel frontend with the API
 // URL patched to point at this Render service.
