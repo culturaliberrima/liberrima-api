@@ -13,6 +13,10 @@ const settingsRoutes = require('./routes/settings');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust Render/Cloudflare proxy so req.secure = true for HTTPS requests.
+// Without this, express-session silently omits Set-Cookie when cookie.secure=true.
+app.set('trust proxy', 1);
+
 // Dedicated session pool — avoids contention with app queries
 const sessionPool = new Pool({
   connectionString: process.env.DATABASE_URL,
