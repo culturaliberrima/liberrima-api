@@ -130,7 +130,9 @@ function fetchVercel(path) {
   });
 }
 
-app.get('/', async (req, res) => {
+// Serve the SPA root (index.html) for any non-API, non-asset path
+// React Router handles /login, /dashboard, etc. on the client side
+async function serveSPA(req, res) {
   try {
     const { text, ct } = await fetchVercel('/');
     res.setHeader('Content-Type', ct || 'text/html');
@@ -138,7 +140,9 @@ app.get('/', async (req, res) => {
   } catch (e) {
     res.status(502).send('Admin panel unavailable');
   }
-});
+}
+
+app.get('/', serveSPA);
 
 app.get('/assets/:file', async (req, res) => {
   try {
@@ -151,6 +155,10 @@ app.get('/assets/:file', async (req, res) => {
     res.status(502).send('Asset unavailable');
   }
 });
+
+// Catch-all: any path that isn't /api/* gets the SPA index.html
+// This lets React Router handle /login, /dashboard, /events, etc.
+app.get(/^\/(?!api).*/, serveSPA);
 
 // Session store diagnostic endpoint
 app.get('/api/debug/session-test', async (req, res) => {
