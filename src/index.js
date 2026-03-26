@@ -147,8 +147,50 @@ function fetchVercel(path) {
 async function serveSPA(req, res) {
   try {
     const { text, ct } = await fetchVercel('/');
+    let html = text;
+
+    // If user has a valid session, inject a fetch interceptor so React's
+    // AuthContext gets /api/me data INSTANTLY (no race vs. PrivateRoute).
+    // Without this, isLoading starts false → PrivateRoute redirects to /login
+    // before the async /api/me call returns, even when the session is valid.
+    if (req.session && req.session.userId && req.session.userEmail) {
+      const user = { id: req.session.userId, email: req.session.userEmail };
+      const userJson = JSON.stringify(user);
+      const injectScript = `<script>
+(function(){
+  var __u=${userJson};
+  var __orig=window.fetch?window.fetch.bind(window):null;
+  function __patchedFetch(url,opts){
+    if(typeof url==='string'&&url.indexOf('/api/me')!==-1){
+      // Restore original fetch immediately so subsequent calls are real
+      if(__orig) window.fetch=__orig;
+      return Promise.resolve(new Response(JSON.stringify(__u),{
+        status:200,
+        headers:{'Content-Type':'application/json'}
+      }));
+    }
+    return __orig?__orig(url,opts):fetch(url,opts);
+  }
+  // Patch as soon as fetch is available (may not exist yet at </head>)
+  if(window.fetch){ window.fetch=__patchedFetch; }
+  else {
+    Object.defineProperty(window,'fetch',{
+      configurable:true, writable:true,
+      set:function(fn){ Object.defineProperty(window,'fetch',{configurable:true,writable:true,value:fn}); window.fetch=__patchedFetch; },
+      get:function(){ return __patchedFetch; }
+    });
+  }
+})();
+</script>`;
+      html = html.replace('</head>', injectScript + '</head>');
+      if (html === text) {
+        // Fallback: inject before </body> if no </head>
+        html = text.replace('</body>', injectScript + '</body>');
+      }
+    }
+
     res.setHeader('Content-Type', ct || 'text/html');
-    res.send(text);
+    res.send(html);
   } catch (e) {
     res.status(502).send('Admin panel unavailable');
   }
