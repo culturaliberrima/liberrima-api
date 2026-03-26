@@ -89,6 +89,14 @@ app.use(session({
   },
 }));
 
+// Request logger — logs all /api/* requests with session info
+app.use('/api', (req, res, next) => {
+  const hasCookie = req.headers.cookie ? 'yes' : 'NO';
+  const sid = req.session ? req.session.id : 'none';
+  console.log(`[REQ] ${req.method} ${req.path} | cookie:${hasCookie} | sid:${sid ? sid.substring(0,12) : 'none'}`);
+  next();
+});
+
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
