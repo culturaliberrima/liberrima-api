@@ -9,6 +9,12 @@ const router = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
+// Helper: format date fields as YYYY-MM-DD so the frontend can parse them correctly
+function formatEventDates(row) {
+  const fmt = (d) => d instanceof Date ? d.toISOString().split('T')[0] : (d ? String(d).split('T')[0] : null);
+  return { ...row, fecha: fmt(row.fecha), fechaFin: fmt(row.fechaFin) };
+}
+
 // Helper: parse FormData fields into event object
 function parseEventFields(body) {
   const boolField = (val) => val === 'true' || val === true;
@@ -51,7 +57,7 @@ router.get('/', async (req, res) => {
     const result = await pool.query(
       'SELECT * FROM events ORDER BY fecha ASC, created_at DESC'
     );
-    return res.json(result.rows);
+    return res.json(result.rows.map(formatEventDates));
   } catch (err) {
     console.error('GET events error:', err);
     return res.status(500).json({ error: 'Error interno' });
@@ -63,7 +69,7 @@ router.get('/:id', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM events WHERE id = $1', [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Evento no encontrado' });
-    return res.json(result.rows[0]);
+    return res.json(formatEventDates(result.rows[0]));
   } catch (err) {
     console.error('GET event error:', err);
     return res.status(500).json({ error: 'Error interno' });
@@ -105,7 +111,7 @@ router.post('/', requireAuth, upload.single('imagen'), async (req, res) => {
       ]
     );
 
-    return res.status(201).json(result.rows[0]);
+    return res.status(201).json(formatEventDates(result.rows[0]));
   } catch (err) {
     console.error('POST event error:', err);
     return res.status(500).json({ error: 'Error interno', detail: err.message });
@@ -148,7 +154,7 @@ router.put('/:id', requireAuth, upload.single('imagen'), async (req, res) => {
       ]
     );
 
-    return res.json(result.rows[0]);
+    return res.json(formatEventDates(result.rows[0]));
   } catch (err) {
     console.error('PUT event error:', err);
     return res.status(500).json({ error: 'Error interno', detail: err.message });
