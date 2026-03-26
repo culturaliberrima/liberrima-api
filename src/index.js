@@ -164,21 +164,59 @@ async function serveSPA(req, res) {
     const { text, ct } = await fetchVercel('/');
     let html = text;
 
-    // If user has a valid session, inject a fetch interceptor so React's
-    // AuthContext gets /api/me data INSTANTLY (no race vs. PrivateRoute).
-    // Without this, isLoading starts false → PrivateRoute redirects to /login
-    // before the async /api/me call returns, even when the session is valid.
+    // If user has a valid session, inject two layers of protection against
+    // the React PrivateRoute race condition:
+    //
+    // LAYER 1 — history intercept: React Router's <Navigate to="/login"> fires
+    // via useEffect and calls history.replaceState BEFORE the auth context's
+    // useEffect resolves. We catch any replaceState/pushState to /login and
+    // hold it for up to 600 ms. If /api/me resolves with user data in that
+    // window, we cancel the redirect entirely. Safety fallback: after 600 ms
+    // without resolution, the redirect is allowed to proceed normally.
+    //
+    // LAYER 2 — fetch intercept: return /api/me data synchronously (as an
+    // immediately-resolved Promise) so the auth context state update fires
+    // as fast as possible, well within the 600 ms hold window.
     if (req.session && req.session.userId && req.session.userEmail) {
       const user = { id: req.session.userId, email: req.session.userEmail };
       const userJson = JSON.stringify(user);
       const injectScript = `<script>
 (function(){
   var __u=${userJson};
+  var __resolved=false;
+  var __pendingNav=null;
+
+  /* ── LAYER 1: history intercept ──────────────────────────────── */
+  var _oReplace=history.replaceState.bind(history);
+  var _oPush=history.pushState.bind(history);
+
+  function _intercept(orig,args){
+    var url=args[2];
+    if(!__resolved && url && (url+'').replace(/^https?:\/\/[^/]*/,'').indexOf('/login')===0){
+      /* Hold this redirect – give auth a chance to resolve */
+      __pendingNav=function(){ orig.apply(history,args); };
+      setTimeout(function(){
+        if(!__resolved && __pendingNav){
+          /* Auth didn't resolve in time – allow the redirect */
+          var fn=__pendingNav; __pendingNav=null; fn();
+        }
+      },600);
+      return;
+    }
+    return orig.apply(history,args);
+  }
+
+  history.replaceState=function(){ return _intercept(_oReplace,arguments); };
+  history.pushState=function(){ return _intercept(_oPush,arguments); };
+
+  /* ── LAYER 2: fetch intercept ────────────────────────────────── */
   var __orig=window.fetch?window.fetch.bind(window):null;
   function __patchedFetch(url,opts){
     if(typeof url==='string'&&url.indexOf('/api/me')!==-1){
-      // Restore original fetch immediately so subsequent calls are real
       if(__orig) window.fetch=__orig;
+      /* Mark auth resolved & cancel any pending /login redirect */
+      __resolved=true;
+      __pendingNav=null;
       return Promise.resolve(new Response(JSON.stringify(__u),{
         status:200,
         headers:{'Content-Type':'application/json'}
@@ -186,12 +224,14 @@ async function serveSPA(req, res) {
     }
     return __orig?__orig(url,opts):fetch(url,opts);
   }
-  // Patch as soon as fetch is available (may not exist yet at </head>)
   if(window.fetch){ window.fetch=__patchedFetch; }
   else {
     Object.defineProperty(window,'fetch',{
-      configurable:true, writable:true,
-      set:function(fn){ Object.defineProperty(window,'fetch',{configurable:true,writable:true,value:fn}); window.fetch=__patchedFetch; },
+      configurable:true,writable:true,
+      set:function(fn){
+        Object.defineProperty(window,'fetch',{configurable:true,writable:true,value:fn});
+        window.fetch=__patchedFetch;
+      },
       get:function(){ return __patchedFetch; }
     });
   }
