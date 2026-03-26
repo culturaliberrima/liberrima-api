@@ -32,6 +32,8 @@ sessionPool.on('error', (err) => {
 const ALLOWED_ORIGINS = [
   'https://liberrima-admin.vercel.app',
   'https://liberrima-list-admin.vercel.app',
+  'https://www.liberrima.com',
+  'https://liberrima.com',
   'http://localhost:5173',
   'http://localhost:3000',
 ];
@@ -317,10 +319,14 @@ app.get('/assets/:file', async (req, res) => {
     const isBinary = /\.(png|jpg|jpeg|gif|svg|ico|woff2?|ttf|eot)$/i.test(file);
 
     if (isCarteleraHost(req)) {
-      // Serve cartelera asset
+      // Serve cartelera asset.
+      // Replace the old API base with an EMPTY string so the bundle
+      // uses relative paths (/api/events, /api/settings/…).  This means
+      // the browser calls  www.liberrima.com/api/…  — same origin, zero
+      // CORS headers required, and we handle those routes right here.
       const { text, ct, buf } = await fetchCartelera(`/assets/${file}`);
       let content = file.endsWith('.js')
-        ? Buffer.from(text.split(CARTELERA_OLD_API).join(NEW_API_BASE))
+        ? Buffer.from(text.split(CARTELERA_OLD_API).join(''))
         : (isBinary ? buf : Buffer.from(text));
       res.setHeader('Content-Type', ct || 'application/octet-stream');
       return res.send(content);
