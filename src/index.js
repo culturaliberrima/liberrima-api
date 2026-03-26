@@ -120,42 +120,65 @@ app.get('/api/debug/bundle-auth', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// Admin panel proxy — serves the Vercel frontend with the API
-// URL patched to point at this Render service.
+// Proxy helpers — serve both the Admin SPA and the public
+// Cartelera from Vercel, with the API URL patched to point at
+// this Render service.
 // ──────────────────────────────────────────────────────────────
 const https = require('https');
+
+// Admin SPA (Vercel)
 const VERCEL_FRONTEND = 'liberrima-list-admin.vercel.app';
-const OLD_API = 'https://liberrima-api.onrender.com/api';
-const NEW_API = process.env.RENDER_EXTERNAL_URL
-  ? `${process.env.RENDER_EXTERNAL_URL}/api`
-  : 'https://liberrima-api-qhle.onrender.com/api';
 
-const _proxyCache = {};
+// Public Cartelera (Vercel)
+const CARTELERA_FRONTEND = 'liberrima-cartelera.vercel.app';
 
-function fetchVercel(path) {
-  return new Promise((resolve, reject) => {
-    if (_proxyCache[path]) return resolve(_proxyCache[path]);
-    const opts = {
-      hostname: VERCEL_FRONTEND,
-      path,
-      headers: { 'User-Agent': 'liberrima-proxy', 'Accept-Encoding': 'identity' },
-    };
-    https.get(opts, (res) => {
-      // Follow redirects (Vercel may redirect)
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchVercel(res.headers.location.replace(`https://${VERCEL_FRONTEND}`, '')).then(resolve).catch(reject);
-      }
-      const chunks = [];
-      res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        const result = { text, ct: res.headers['content-type'] || '' };
-        _proxyCache[path] = result;
-        resolve(result);
-      });
-    }).on('error', reject);
-  });
+// Old API base the cartelera bundle was compiled against
+const CARTELERA_OLD_API = 'https://liberrima-api.onrender.com';
+
+// New API base (this very service)
+const NEW_API_BASE = process.env.RENDER_EXTERNAL_URL
+  ? process.env.RENDER_EXTERNAL_URL
+  : 'https://liberrima-api-qhle.onrender.com';
+
+// Admin OLD_API kept for backward-compat with asset patching below
+const OLD_API = `${CARTELERA_OLD_API}/api`;
+const NEW_API = `${NEW_API_BASE}/api`;
+
+// ── Generic Vercel proxy fetcher ────────────────────────────────────────────
+// Returns { text, ct, buf } — buf is the raw Buffer (for images/fonts).
+function makeFetcher(hostname, cache) {
+  return function fetchFrom(path) {
+    return new Promise((resolve, reject) => {
+      if (cache[path]) return resolve(cache[path]);
+      const opts = {
+        hostname,
+        path,
+        headers: { 'User-Agent': 'liberrima-proxy', 'Accept-Encoding': 'identity' },
+      };
+      https.get(opts, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          const loc = res.headers.location.replace(`https://${hostname}`, '');
+          return fetchFrom(loc).then(resolve).catch(reject);
+        }
+        const chunks = [];
+        res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          const ct = res.headers['content-type'] || '';
+          const text = buf.toString('utf8');
+          const result = { text, ct, buf };
+          cache[path] = result;
+          resolve(result);
+        });
+      }).on('error', reject);
+    });
+  };
 }
+
+const _adminCache = {};
+const _carteleraCache = {};
+const fetchVercel = makeFetcher(VERCEL_FRONTEND, _adminCache);
+const fetchCartelera = makeFetcher(CARTELERA_FRONTEND, _carteleraCache);
 
 // Serve the SPA root (index.html) for any non-API, non-asset path
 // React Router handles /login, /dashboard, etc. on the client side
@@ -251,23 +274,90 @@ async function serveSPA(req, res) {
   }
 }
 
-app.get('/', serveSPA);
+// ── Cartelera SPA (public) ──────────────────────────────────────────────────
+// Served when:
+//   • Host header is liberrima.com / www.liberrima.com  (production)
+//   • OR request path starts with /cartelera            (testing via Render URL)
+async function serveCarteleraSPA(req, res) {
+  try {
+    const { text, ct } = await fetchCartelera('/');
+    // Rewrite absolute asset paths so they resolve under /cartelera/
+    // (only needed when serving under a sub-path, harmless when at root)
+    const basePath = isCarteleraHost(req) ? '' : '/cartelera';
+    const html = text
+      .split('src="/assets/').join(`src="${basePath}/assets/`)
+      .split('href="/assets/').join(`href="${basePath}/assets/`)
+      .split('crossorigin src="/').join(`crossorigin src="${basePath}/`)
+      .split('crossorigin href="/').join(`crossorigin href="${basePath}/`);
+    res.setHeader('Content-Type', ct || 'text/html');
+    res.send(html);
+  } catch (e) {
+    console.error('serveCarteleraSPA error:', e.message);
+    res.status(502).send('Cartelera no disponible');
+  }
+}
+
+function isCarteleraHost(req) {
+  const host = (req.headers.host || '').toLowerCase();
+  return host.includes('liberrima.com');
+}
+
+// ── Root & assets: host-aware ───────────────────────────────────────────────
+app.get('/', (req, res) => {
+  if (isCarteleraHost(req)) return serveCarteleraSPA(req, res);
+  return serveSPA(req, res);
+});
 
 app.get('/assets/:file', async (req, res) => {
   try {
-    const { text, ct } = await fetchVercel(`/assets/${req.params.file}`);
-    let content = text;
-    if (req.params.file.endsWith('.js')) content = content.split(OLD_API).join(NEW_API);
+    const file = req.params.file;
+    const isBinary = /\.(png|jpg|jpeg|gif|svg|ico|woff2?|ttf|eot)$/i.test(file);
+
+    if (isCarteleraHost(req)) {
+      // Serve cartelera asset
+      const { text, ct, buf } = await fetchCartelera(`/assets/${file}`);
+      let content = file.endsWith('.js')
+        ? Buffer.from(text.split(CARTELERA_OLD_API).join(NEW_API_BASE))
+        : (isBinary ? buf : Buffer.from(text));
+      res.setHeader('Content-Type', ct || 'application/octet-stream');
+      return res.send(content);
+    }
+
+    // Serve admin panel asset
+    const { text, ct } = await fetchVercel(`/assets/${file}`);
+    let content = file.endsWith('.js') ? text.split(OLD_API).join(NEW_API) : text;
     res.setHeader('Content-Type', ct || 'application/javascript');
-    res.send(content);
+    return res.send(content);
   } catch (e) {
     res.status(502).send('Asset unavailable');
   }
 });
 
-// Catch-all: any path that isn't /api/* gets the SPA index.html
+// ── /cartelera/* sub-path — for testing before DNS cutover ─────────────────
+app.get('/cartelera', serveCarteleraSPA);
+app.get('/cartelera/', serveCarteleraSPA);
+
+app.get('/cartelera/assets/:file', async (req, res) => {
+  try {
+    const file = req.params.file;
+    const isBinary = /\.(png|jpg|jpeg|gif|svg|ico|woff2?|ttf|eot)$/i.test(file);
+    const { text, ct, buf } = await fetchCartelera(`/assets/${file}`);
+    let content = file.endsWith('.js')
+      ? Buffer.from(text.split(CARTELERA_OLD_API).join(NEW_API_BASE))
+      : (isBinary ? buf : Buffer.from(text));
+    res.setHeader('Content-Type', ct || 'application/octet-stream');
+    return res.send(content);
+  } catch (e) {
+    res.status(502).send('Asset unavailable');
+  }
+});
+
+// Catch-all: any path that isn't /api/* or /cartelera/* gets the admin SPA
 // This lets React Router handle /login, /dashboard, /events, etc.
-app.get(/^\/(?!api).*/, serveSPA);
+app.get(/^\/(?!api|cartelera).*/, (req, res) => {
+  if (isCarteleraHost(req)) return serveCarteleraSPA(req, res);
+  return serveSPA(req, res);
+});
 
 // Session store diagnostic endpoint
 app.get('/api/debug/session-test', async (req, res) => {
