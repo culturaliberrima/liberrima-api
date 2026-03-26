@@ -55,8 +55,58 @@ app.use(session({
 }));
 
 // Health check
-app.get('/', (req, res) => res.json({ status: 'ok', service: 'liberrima-api' }));
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+
+// ──────────────────────────────────────────────────────────────
+// Admin panel proxy — serves the Vercel frontend with the API
+// URL patched to point at this Render service.
+// ──────────────────────────────────────────────────────────────
+const https = require('https');
+const VERCEL_FRONTEND = 'liberrima-list-admin.vercel.app';
+const OLD_API = 'https://liberrima-api.onrender.com/api';
+const NEW_API = process.env.RENDER_EXTERNAL_URL
+  ? `${process.env.RENDER_EXTERNAL_URL}/api`
+  : 'https://liberrima-api-qhle.onrender.com/api';
+
+const _proxyCache = {};
+
+function fetchVercel(path) {
+  return new Promise((resolve, reject) => {
+    if (_proxyCache[path]) return resolve(_proxyCache[path]);
+    const opts = { hostname: VERCEL_FRONTEND, path, headers: { 'User-Agent': 'liberrima-proxy' } };
+    let buf = '';
+    https.get(opts, (res) => {
+      res.on('data', (c) => (buf += c));
+      res.on('end', () => {
+        const result = { text: buf, ct: res.headers['content-type'] || '' };
+        _proxyCache[path] = result;
+        resolve(result);
+      });
+    }).on('error', reject);
+  });
+}
+
+app.get('/', async (req, res) => {
+  try {
+    const { text, ct } = await fetchVercel('/');
+    res.setHeader('Content-Type', ct || 'text/html');
+    res.send(text);
+  } catch (e) {
+    res.status(502).send('Admin panel unavailable');
+  }
+});
+
+app.get('/assets/:file', async (req, res) => {
+  try {
+    const { text, ct } = await fetchVercel(`/assets/${req.params.file}`);
+    let content = text;
+    if (req.params.file.endsWith('.js')) content = content.split(OLD_API).join(NEW_API);
+    res.setHeader('Content-Type', ct || 'application/javascript');
+    res.send(content);
+  } catch (e) {
+    res.status(502).send('Asset unavailable');
+  }
+});
 
 // Routes
 app.use('/api', authRoutes);
