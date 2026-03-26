@@ -30,9 +30,10 @@ router.post('/login', async (req, res) => {
 
     req.session.save((err) => {
       if (err) {
-        console.error('Session save error:', err);
+        console.error('[LOGIN] Session save error:', err);
         return res.status(500).json({ error: 'Error al guardar sesión' });
       }
+      console.log('[LOGIN] Session saved OK. SID:', req.session.id, 'userId:', req.session.userId);
       return res.json({ ok: true, email: user.email });
     });
     return;

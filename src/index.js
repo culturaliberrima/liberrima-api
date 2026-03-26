@@ -4,6 +4,7 @@ const cors = require('cors');
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 const pool = require('./db');
+const { Pool } = require('pg');
 
 const authRoutes = require('./routes/auth');
 const eventsRoutes = require('./routes/events');
@@ -11,6 +12,17 @@ const settingsRoutes = require('./routes/settings');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Dedicated session pool — avoids contention with app queries
+const sessionPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  max: 5,
+});
+
+sessionPool.on('error', (err) => {
+  console.error('[SESSION POOL ERROR]', err.message);
+});
 
 // Allowed origins
 const ALLOWED_ORIGINS = [
@@ -39,12 +51,33 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Session store in PostgreSQL
+const sessionStore = new pgSession({
+  pool: sessionPool,
+  tableName: 'session',
+  createTableIfMissing: true,
+  errorLog: (...args) => console.error('[connect-pg-simple ERROR]', ...args),
+});
+
+// Verify session table on startup
+sessionPool.query('SELECT count(*) FROM session')
+  .then(r => console.log('[SESSION STORE] Table OK, rows:', r.rows[0].count))
+  .catch(e => {
+    console.error('[SESSION STORE] Table check failed:', e.message);
+    // Attempt manual table creation
+    return sessionPool.query(`
+      CREATE TABLE IF NOT EXISTS session (
+        sid varchar NOT NULL COLLATE "default",
+        sess json NOT NULL,
+        expire timestamp(6) NOT NULL,
+        CONSTRAINT session_pkey PRIMARY KEY (sid) NOT DEFERRABLE INITIALLY IMMEDIATE
+      ) WITH (OIDS=FALSE);
+      CREATE INDEX IF NOT EXISTS IDX_session_expire ON session (expire);
+    `).then(() => console.log('[SESSION STORE] Table created manually'))
+      .catch(e2 => console.error('[SESSION STORE] Manual creation failed:', e2.message));
+  });
+
 app.use(session({
-  store: new pgSession({
-    pool,
-    tableName: 'session',
-    createTableIfMissing: true,
-  }),
+  store: sessionStore,
   secret: process.env.SESSION_SECRET || 'liberrima-secret-2024',
   resave: false,
   saveUninitialized: false,
@@ -117,6 +150,42 @@ app.get('/assets/:file', async (req, res) => {
   } catch (e) {
     res.status(502).send('Asset unavailable');
   }
+});
+
+// Session store diagnostic endpoint
+app.get('/api/debug/session-test', async (req, res) => {
+  const results = {};
+  try {
+    // 1. Check session table exists and count rows
+    const countResult = await sessionPool.query('SELECT count(*) FROM session');
+    results.sessionCount = countResult.rows[0].count;
+  } catch (e) {
+    results.sessionTableError = e.message;
+  }
+  try {
+    // 2. Test direct store set()
+    await new Promise((resolve, reject) => {
+      const testSid = 'debug-test-' + Date.now();
+      const testSession = {
+        cookie: { expires: new Date(Date.now() + 60000), httpOnly: true },
+        userId: 0,
+        debugTest: true,
+      };
+      sessionStore.set(testSid, testSession, (err) => {
+        if (err) return reject(err);
+        // Clean up test session
+        sessionStore.destroy(testSid, () => {});
+        resolve();
+      });
+    });
+    results.storeSetTest = 'OK';
+  } catch (e) {
+    results.storeSetError = e.message;
+  }
+  results.currentSession = req.session ? { id: req.session.id, userId: req.session.userId } : null;
+  results.nodeEnv = process.env.NODE_ENV;
+  results.dbUrl = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/:([^:@]+)@/, ':***@') : 'not set';
+  return res.json(results);
 });
 
 // Routes
