@@ -281,14 +281,17 @@ async function serveSPA(req, res) {
 async function serveCarteleraSPA(req, res) {
   try {
     const { text, ct } = await fetchCartelera('/');
-    // Rewrite absolute asset paths so they resolve under /cartelera/
-    // (only needed when serving under a sub-path, harmless when at root)
+    // When serving under /cartelera sub-path, rewrite absolute asset refs.
+    // We only replace the two canonical patterns the Vite HTML emits:
+    //   src="/assets/   and   href="/assets/
+    // Avoiding broader patterns (e.g. crossorigin src="/") prevents
+    // double-substitution when those attributes appear together.
     const basePath = isCarteleraHost(req) ? '' : '/cartelera';
-    const html = text
-      .split('src="/assets/').join(`src="${basePath}/assets/`)
-      .split('href="/assets/').join(`href="${basePath}/assets/`)
-      .split('crossorigin src="/').join(`crossorigin src="${basePath}/`)
-      .split('crossorigin href="/').join(`crossorigin href="${basePath}/`);
+    const html = basePath
+      ? text
+          .split('src="/assets/').join(`src="${basePath}/assets/`)
+          .split('href="/assets/').join(`href="${basePath}/assets/`)
+      : text;
     res.setHeader('Content-Type', ct || 'text/html');
     res.send(html);
   } catch (e) {
