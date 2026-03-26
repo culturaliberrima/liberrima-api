@@ -28,6 +28,8 @@ app.use(cors({
     if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
     // Allow any vercel.app subdomain for Libérrima
     if (/liberrima.*\.vercel\.app$/.test(origin)) return callback(null, true);
+    // Allow any onrender.com subdomain (for our own Render-hosted proxy frontend)
+    if (/\.onrender\.com$/.test(origin)) return callback(null, true);
     return callback(new Error('CORS not allowed: ' + origin));
   },
   credentials: true,
