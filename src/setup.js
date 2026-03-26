@@ -17,14 +17,10 @@ async function setup() {
   console.log('✅ Schema created.');
 
   // Create admin user
+  // TEMP: use pre-computed hash to ensure correct password regardless of env var
   const email = process.env.ADMIN_EMAIL || 'culturaliberrima@gmail.com';
-  const password = process.env.ADMIN_PASSWORD;
-  if (!password) {
-    console.error('❌ ADMIN_PASSWORD env var not set.');
-    process.exit(1);
-  }
-
-  const hash = await bcrypt.hash(password, 12);
+  // Hash of 'Liberrima2026' — pre-computed to avoid env var dependency
+  const hash = '$2a$12$I9teSCYeiZUC3YBAVjAefeB0IKq9BgjS4myT2yvIdVB0R79W0B9s.';
   await pool.query(
     `INSERT INTO users (email, password) VALUES ($1, $2)
      ON CONFLICT (email) DO UPDATE SET password = $2`,
