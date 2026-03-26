@@ -34,7 +34,7 @@ router.post('/login', async (req, res) => {
         return res.status(500).json({ error: 'Error al guardar sesión' });
       }
       console.log('[LOGIN] Session saved OK. SID:', req.session.id, 'userId:', req.session.userId);
-      return res.json({ ok: true, email: user.email });
+      return res.json({ ok: true, user: { id: user.id, email: user.email, role: user.role || 'admin', modulos_activos: user.modulos_activos || [] } });
     });
     return;
   } catch (err) {
@@ -62,7 +62,7 @@ router.get('/me', requireAuth, async (req, res) => {
     if (!user) {
       return res.status(401).json({ error: 'Usuario no encontrado' });
     }
-    return res.json({ id: user.id, email: user.email });
+    return res.json({ user: { id: user.id, email: user.email, role: user.role || 'admin', modulos_activos: user.modulos_activos || [] } });
   } catch (err) {
     console.error('Me error:', err);
     return res.status(500).json({ error: 'Error interno' });
