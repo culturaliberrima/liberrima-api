@@ -73,12 +73,21 @@ const _proxyCache = {};
 function fetchVercel(path) {
   return new Promise((resolve, reject) => {
     if (_proxyCache[path]) return resolve(_proxyCache[path]);
-    const opts = { hostname: VERCEL_FRONTEND, path, headers: { 'User-Agent': 'liberrima-proxy' } };
-    let buf = '';
+    const opts = {
+      hostname: VERCEL_FRONTEND,
+      path,
+      headers: { 'User-Agent': 'liberrima-proxy', 'Accept-Encoding': 'identity' },
+    };
     https.get(opts, (res) => {
-      res.on('data', (c) => (buf += c));
+      // Follow redirects (Vercel may redirect)
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchVercel(res.headers.location.replace(`https://${VERCEL_FRONTEND}`, '')).then(resolve).catch(reject);
+      }
+      const chunks = [];
+      res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
       res.on('end', () => {
-        const result = { text: buf, ct: res.headers['content-type'] || '' };
+        const text = Buffer.concat(chunks).toString('utf8');
+        const result = { text, ct: res.headers['content-type'] || '' };
         _proxyCache[path] = result;
         resolve(result);
       });
