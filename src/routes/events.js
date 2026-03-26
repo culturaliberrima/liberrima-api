@@ -10,9 +10,13 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Helper: format date fields as YYYY-MM-DD so the frontend can parse them correctly
+// Also adds `categoria` (singular string) derived from categorias[0], which is what
+// the frontend table component reads (u.categoria, not u.categorias).
 function formatEventDates(row) {
   const fmt = (d) => d instanceof Date ? d.toISOString().split('T')[0] : (d ? String(d).split('T')[0] : null);
-  return { ...row, fecha: fmt(row.fecha), fechaFin: fmt(row.fechaFin) };
+  const cats = row.categorias;
+  const categoria = Array.isArray(cats) && cats.length > 0 ? cats[0] : (typeof cats === 'string' ? cats : null);
+  return { ...row, fecha: fmt(row.fecha), fechaFin: fmt(row.fechaFin), categoria };
 }
 
 // Helper: parse FormData fields into event object
