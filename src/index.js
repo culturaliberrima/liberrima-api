@@ -294,7 +294,7 @@ async function serveCarteleraSPA(req, res) {
           .split('src="/assets/').join(`src="${basePath}/assets/`)
           .split('href="/assets/').join(`href="${basePath}/assets/`)
       : text;
-    const _tz = '<script>(function(){var _o=Date.prototype.toISOString;Date.prototype.toISOString=function(){if(Math.abs(Date.now()-this.getTime())<5e3){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City'}).format(this)+'T00:00:00.000Z';}return _o.call(this);};})()</script>';
+    const _tz = "<script>(function(){var _o=Date.prototype.toISOString;Date.prototype.toISOString=function(){if(Math.abs(Date.now()-this.getTime())<5e3){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City'}).format(this)+'T00:00:00.000Z';}return _o.call(this);};})()</script>";
     const _html = html.replace('</head>', _tz + '</head>');
     res.setHeader('Content-Type', ct || 'text/html');
     res.send(_html);
